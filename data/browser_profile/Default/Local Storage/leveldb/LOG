@@ -1,0 +1,5 @@
+2026/05/31-13:25:29.255 21e8 Creating DB D:\Project\xiaohongshu\data\browser_profile\Default\Local Storage\leveldb since it was missing.
+2026/05/31-13:25:29.272 21e8 Reusing MANIFEST D:\Project\xiaohongshu\data\browser_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/05/31-13:26:29.285 21e8 Level-0 table #5: started
+2026/05/31-13:26:29.287 21e8 Level-0 table #5: 23166 bytes OK
+2026/05/31-13:26:29.289 21e8 Delete type=0 #3

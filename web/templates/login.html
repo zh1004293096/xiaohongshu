@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 小红书团建线索挖掘</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="login-container">
+        <h1>🔍 小红书团建线索挖掘</h1>
+        <p class="subtitle">请登录小红书账号以开始采集</p>
+
+        <!-- Tab 切换 -->
+        <div class="login-tabs">
+            <button class="tab-btn active" onclick="switchTab('qrcode')">📱 扫码登录</button>
+            <button class="tab-btn" onclick="switchTab('phone')">📞 手机号登录</button>
+        </div>
+
+        <!-- 扫码登录 -->
+        <div id="tab-qrcode" class="login-tab-content">
+            <div class="qrcode-wrapper" id="qrcode-status-box">
+                <div class="login-guide" id="qrcode-guide">
+                    <p class="guide-icon">📱</p>
+                    <p class="guide-text" id="qrcode-status">点击下方按钮，在弹出的浏览器窗口中扫码登录</p>
+                </div>
+            </div>
+            <div class="qrcode-actions">
+                <button class="btn btn-primary" id="btn-open-login" onclick="openLoginPage()">
+                    打开小红书登录页
+                </button>
+                <button class="btn" onclick="retryLogin()">重新打开</button>
+            </div>
+        </div>
+
+        <!-- 手机号登录 -->
+        <div id="tab-phone" class="login-tab-content" style="display:none;">
+            <div class="phone-form">
+                <div class="form-group">
+                    <label>手机号</label>
+                    <input type="tel" id="phone-input" class="input" placeholder="请输入手机号" maxlength="11" />
+                </div>
+                <div class="form-group">
+                    <label>验证码</label>
+                    <div class="code-row">
+                        <input type="text" id="code-input" class="input" placeholder="请输入验证码" maxlength="6" />
+                        <button class="btn btn-sm" id="send-code-btn" onclick="sendCode()">获取验证码</button>
+                    </div>
+                </div>
+                <p class="phone-hint">点击"获取验证码"后，在弹出的浏览器窗口中完成滑块验证</p>
+                <button class="btn btn-primary btn-block" onclick="verifyPhone()">登录</button>
+            </div>
+        </div>
+
+        <div id="login-msg" class="msg"></div>
+    </div>
+
+    <script>
+        let loginPollTimer = null;
+        let codeCountdown = 0;
+
+        // Tab 切换
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.login-tab-content').forEach(c => c.style.display = 'none');
+            document.getElementById('tab-' + tab).style.display = 'block';
+            const btns = document.querySelectorAll('.tab-btn');
+            btns[tab === 'qrcode' ? 0 : 1].classList.add('active');
+            stopPoll();
+        }
+
+        // ============ 扫码登录 ============
+        async function openLoginPage() {
+            const statusEl = document.getElementById('qrcode-status');
+            const guideEl = document.getElementById('qrcode-guide');
+            statusEl.textContent = '正在打开浏览器...';
+            guideEl.querySelector('.guide-icon').textContent = '⏳';
+
+            document.getElementById('btn-open-login').disabled = true;
+            document.getElementById('btn-open-login').textContent = '打开中...';
+
+            // Fire-and-forget：不等响应，直接开始轮询
+            fetch('/api/auth/login-page/open', { method: 'POST' })
+                .then(async (resp) => {
+                    const data = await resp.json();
+                    if (data.success && data.already_logged_in) {
+                        statusEl.textContent = '已登录，正在跳转...';
+                        guideEl.querySelector('.guide-icon').textContent = '✅';
+                        setTimeout(() => location.href = '/main', 500);
+                    }
+                })
+                .catch(() => {});
+
+            // 立即开始轮询状态
+            statusEl.textContent = '请在弹出的浏览器窗口扫码';
+            guideEl.querySelector('.guide-icon').textContent = '📱';
+            document.getElementById('btn-open-login').textContent = '等待扫码中...';
+            showMsg('浏览器窗口已打开，请扫码登录', 'info');
+            startPoll();
+        }
+
+        async function retryLogin() {
+            document.getElementById('btn-open-login').disabled = false;
+            document.getElementById('btn-open-login').textContent = '打开小红书登录页';
+            document.getElementById('qrcode-status').textContent = '点击下方按钮重新打开登录页';
+            document.getElementById('qrcode-guide').querySelector('.guide-icon').textContent = '📱';
+            stopPoll();
+            showMsg('', '');
+        }
+
+        function startPoll() {
+            stopPoll();
+            loginPollTimer = setInterval(async () => {
+                try {
+                    const resp = await fetch('/api/auth/status');
+                    const data = await resp.json();
+                    const statusEl = document.getElementById('qrcode-status');
+                    const guideIcon = document.getElementById('qrcode-guide').querySelector('.guide-icon');
+
+                    if (data.status === 'success') {
+                        statusEl.textContent = '登录成功！正在跳转...';
+                        guideIcon.textContent = '✅';
+                        stopPoll();
+                        setTimeout(() => location.href = '/main', 500);
+                    } else if (data.status === 'scanned') {
+                        statusEl.textContent = data.message;
+                        guideIcon.textContent = '👆';
+                    } else if (data.status === 'expired') {
+                        statusEl.textContent = data.message;
+                        guideIcon.textContent = '⏰';
+                        stopPoll();
+                        document.getElementById('btn-open-login').disabled = false;
+                        document.getElementById('btn-open-login').textContent = '重新获取二维码';
+                    } else if (data.status === 'error') {
+                        statusEl.textContent = data.message;
+                        guideIcon.textContent = '❌';
+                        stopPoll();
+                    } else {
+                        // waiting
+                        statusEl.textContent = data.message || '请扫码';
+                        guideIcon.textContent = '📱';
+                    }
+                } catch (e) { /* ignore poll errors */ }
+            }, 1500);
+        }
+
+        function stopPoll() {
+            if (loginPollTimer) { clearInterval(loginPollTimer); loginPollTimer = null; }
+        }
+
+        // ============ 手机号登录 ============
+        async function sendCode() {
+            if (codeCountdown > 0) return;
+            const phone = document.getElementById('phone-input').value.trim();
+            if (!phone || phone.length < 11) {
+                showMsg('请输入正确的手机号', 'error'); return;
+            }
+            const btn = document.getElementById('send-code-btn');
+            btn.disabled = true;
+            btn.textContent = '发送中...';
+
+            // 先确保浏览器窗口已打开
+            try {
+                await fetch('/api/auth/login-page/open', { method: 'POST' });
+            } catch (e) { /* continue */ }
+
+            try {
+                const resp = await fetch('/api/auth/phone/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone }),
+                });
+                const data = await resp.json();
+                showMsg(data.message, data.success ? 'success' : 'error');
+                if (data.success) {
+                    codeCountdown = 60;
+                    countdownTick();
+                }
+            } catch (e) {
+                showMsg('网络错误', 'error');
+            }
+            btn.disabled = false;
+        }
+
+        function countdownTick() {
+            const btn = document.getElementById('send-code-btn');
+            if (codeCountdown > 0) {
+                btn.textContent = `${codeCountdown}s 后重发`;
+                btn.disabled = true;
+                codeCountdown--;
+                setTimeout(countdownTick, 1000);
+            } else {
+                btn.textContent = '获取验证码';
+                btn.disabled = false;
+            }
+        }
+
+        async function verifyPhone() {
+            const phone = document.getElementById('phone-input').value.trim();
+            const code = document.getElementById('code-input').value.trim();
+            if (!phone || !code) {
+                showMsg('请填写手机号和验证码', 'error'); return;
+            }
+            showMsg('登录中...', 'info');
+            try {
+                const resp = await fetch('/api/auth/phone/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone, code }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    showMsg('登录成功，正在跳转...', 'success');
+                    setTimeout(() => location.href = '/main', 500);
+                } else {
+                    showMsg(data.message, 'error');
+                }
+            } catch (e) {
+                showMsg('网络错误', 'error');
+            }
+        }
+
+        function showMsg(msg, type) {
+            const el = document.getElementById('login-msg');
+            el.textContent = msg;
+            el.className = 'msg msg-' + type;
+        }
+
+        // 页面关闭时停止轮询
+        window.addEventListener('beforeunload', stopPoll);
+    </script>
+</body>
+</html>

@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小红书团建线索挖掘</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- 顶栏 -->
+    <header>
+        <h2>🔍 小红书团建线索挖掘</h2>
+        <div class="header-right">
+            <span id="user-info" class="user-badge">已登录</span>
+            <button class="btn" onclick="logout()">退出登录</button>
+        </div>
+    </header>
+
+    <!-- 主区域 -->
+    <main>
+        <!-- 左侧：控制面板 -->
+        <aside class="sidebar">
+            <!-- 关键词管理 -->
+            <section class="card">
+                <h3>📝 搜索关键词</h3>
+                <div class="keyword-input-row">
+                    <input type="text" id="new-keyword" class="input" placeholder="输入新关键词" />
+                    <button class="btn btn-primary btn-sm" onclick="addKeyword()">添加</button>
+                </div>
+                <div id="keyword-tags" class="keyword-tags"></div>
+                <div class="keyword-actions">
+                    <button class="btn" onclick="selectAllKeywords()">全选</button>
+                    <button class="btn" onclick="deselectAllKeywords()">取消全选</button>
+                </div>
+            </section>
+
+            <!-- 采集控制 -->
+            <section class="card">
+                <h3>🎯 开始采集</h3>
+                <button class="btn btn-primary btn-block" id="btn-start" onclick="startCrawl()">
+                    🚀 开始采集已选关键词
+                </button>
+                <button class="btn btn-block" id="btn-stop" onclick="stopCrawl()" style="display:none;">
+                    ⏹ 停止采集
+                </button>
+
+                <!-- 进度条 -->
+                <div id="progress-area" class="progress-area" style="display:none;">
+                    <div class="progress-bar-track">
+                        <div id="progress-bar" class="progress-bar-fill"></div>
+                    </div>
+                    <p id="progress-text" class="progress-text"></p>
+                </div>
+            </section>
+
+            <!-- 筛选 -->
+            <section class="card">
+                <h3>🔎 筛选条件</h3>
+                <div class="form-group">
+                    <label>关键词</label>
+                    <select id="filter-keyword" class="input" onchange="loadResults()">
+                        <option value="">全部关键词</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>开始日期</label>
+                        <input type="date" id="filter-start-date" class="input" onchange="loadResults()" />
+                    </div>
+                    <div class="form-group">
+                        <label>结束日期</label>
+                        <input type="date" id="filter-end-date" class="input" onchange="loadResults()" />
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="filter-intent-only" onchange="loadResults()" />
+                        仅显示意向评论
+                    </label>
+                </div>
+                <div class="form-group" id="filter-limit-group" style="display:none;">
+                    <label>显示最新</label>
+                    <select id="filter-limit" class="input" onchange="loadResults()">
+                        <option value="0">全部</option>
+                        <option value="50">50 条</option>
+                        <option value="100">100 条</option>
+                        <option value="200">200 条</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- 导出 -->
+            <section class="card">
+                <h3>📥 导出数据</h3>
+                <button class="btn btn-success btn-block" onclick="exportExcel()">
+                    📊 导出为 Excel
+                </button>
+                <button class="btn btn-danger btn-block btn-sm" onclick="clearData()">
+                    🗑 清空数据
+                </button>
+            </section>
+
+            <!-- 统计 -->
+            <section class="card">
+                <h3>📊 统计</h3>
+                <div id="stats-area">
+                    <p>笔记数: <strong id="stat-notes">0</strong></p>
+                    <p>评论数: <strong id="stat-comments">0</strong></p>
+                    <p>意向评论: <strong id="stat-intent">0</strong></p>
+                </div>
+            </section>
+        </aside>
+
+        <!-- 右侧：结果表格 -->
+        <section class="content">
+            <div class="card">
+                <h3 id="result-title">📋 采集结果 <span id="result-count"></span></h3>
+                <div class="table-wrapper">
+                    <table id="result-table">
+                        <thead>
+                            <tr>
+                                <th>意向</th>
+                                <th>评论内容</th>
+                                <th>评论者</th>
+                                <th>评论时间</th>
+                                <th>笔记标题</th>
+                                <th>笔记链接</th>
+                                <th>关键词</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="7" class="empty-msg">暂无数据，请先开始采集</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // ============ 初始化和轮询 ============
+        let statusPollTimer = null;
+
+        async function init() {
+            await loadKeywords();
+            await loadStats();
+            await checkAuth();
+            // 如果正在采集，开始轮询
+            startStatusPoll();
+        }
+
+        async function checkAuth() {
+            const resp = await fetch('/api/auth/check');
+            const data = await resp.json();
+            if (!data.logged_in) {
+                location.href = '/';
+            }
+        }
+
+        function startStatusPoll() {
+            if (statusPollTimer) return;
+            statusPollTimer = setInterval(async () => {
+                await updateCrawlProgress();
+                await loadStats();
+            }, 2000);
+        }
+
+        // ============ 关键词管理 ============
+        async function loadKeywords() {
+            const resp = await fetch('/api/keywords');
+            const data = await resp.json();
+            const container = document.getElementById('keyword-tags');
+            const filterSelect = document.getElementById('filter-keyword');
+            container.innerHTML = '';
+
+            data.keywords.forEach(kw => {
+                // 标签
+                const tag = document.createElement('span');
+                tag.className = 'keyword-tag selected';
+                tag.textContent = kw;
+                tag.dataset.kw = kw;
+                tag.onclick = () => tag.classList.toggle('selected');
+                container.appendChild(tag);
+
+                // 删除按钮
+                const del = document.createElement('span');
+                del.className = 'keyword-tag-delete';
+                del.textContent = '×';
+                del.onclick = (e) => { e.stopPropagation(); removeKeyword(kw); };
+                tag.appendChild(del);
+
+                // 筛选下拉
+                const opt = document.createElement('option');
+                opt.value = kw;
+                opt.textContent = kw;
+                filterSelect.appendChild(opt);
+            });
+        }
+
+        function getSelectedKeywords() {
+            const tags = document.querySelectorAll('.keyword-tag.selected');
+            return Array.from(tags).map(t => t.dataset.kw);
+        }
+
+        function selectAllKeywords() {
+            document.querySelectorAll('.keyword-tag').forEach(t => t.classList.add('selected'));
+        }
+
+        function deselectAllKeywords() {
+            document.querySelectorAll('.keyword-tag').forEach(t => t.classList.remove('selected'));
+        }
+
+        async function addKeyword() {
+            const input = document.getElementById('new-keyword');
+            const kw = input.value.trim();
+            if (!kw) return;
+            try {
+                await fetch('/api/keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keyword: kw }),
+                });
+                input.value = '';
+                await loadKeywords();
+            } catch (e) { alert('添加失败'); }
+        }
+
+        async function removeKeyword(kw) {
+            if (!confirm(`删除关键词 "${kw}"？`)) return;
+            try {
+                await fetch(`/api/keywords/${encodeURIComponent(kw)}`, { method: 'DELETE' });
+                await loadKeywords();
+            } catch (e) { alert('删除失败'); }
+        }
+
+        // ============ 采集控制 ============
+        async function startCrawl() {
+            const keywords = getSelectedKeywords();
+            if (keywords.length === 0) {
+                alert('请至少选择一个关键词'); return;
+            }
+            try {
+                const resp = await fetch('/api/crawl/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ keywords }),
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById('btn-start').style.display = 'none';
+                    document.getElementById('btn-stop').style.display = 'block';
+                    document.getElementById('progress-area').style.display = 'block';
+                    startStatusPoll();
+                } else {
+                    alert(data.message);
+                }
+            } catch (e) { alert('启动失败'); }
+        }
+
+        async function stopCrawl() {
+            await fetch('/api/crawl/stop', { method: 'POST' });
+        }
+
+        async function updateCrawlProgress() {
+            try {
+                const resp = await fetch('/api/crawl/status');
+                const data = await resp.json();
+
+                const btnStart = document.getElementById('btn-start');
+                const btnStop = document.getElementById('btn-stop');
+                const progressArea = document.getElementById('progress-area');
+
+                if (data.running) {
+                    btnStart.style.display = 'none';
+                    btnStop.style.display = 'block';
+                    progressArea.style.display = 'block';
+
+                    const total = data.notes_total || 1;
+                    const done = data.notes_found || 0;
+                    const pct = Math.min(100, Math.round((done / Math.max(total, done + 1)) * 100));
+
+                    document.getElementById('progress-bar').style.width = pct + '%';
+                    document.getElementById('progress-text').textContent =
+                        `阶段: ${data.phase} | 关键词: ${data.keyword} | 笔记: ${data.notes_found} | 评论: ${data.comments_found}`;
+                } else {
+                    btnStart.style.display = 'block';
+                    btnStop.style.display = 'none';
+                    if (data.phase === 'done' || data.phase === 'error') {
+                        progressArea.style.display = 'none';
+                        await loadResults();
+                    }
+                    if (data.error) {
+                        document.getElementById('progress-text').textContent = '出错: ' + data.error;
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // ============ 结果加载 ============
+        async function loadResults() {
+            const params = new URLSearchParams();
+            const kw = document.getElementById('filter-keyword').value;
+            const sd = document.getElementById('filter-start-date').value;
+            const ed = document.getElementById('filter-end-date').value;
+            const intentOnly = document.getElementById('filter-intent-only').checked ? '1' : '0';
+
+            if (kw) params.set('keyword', kw);
+            if (sd) params.set('start_date', sd);
+            if (ed) params.set('end_date', ed);
+            params.set('intent_only', intentOnly);
+
+            const resp = await fetch('/api/results?' + params.toString());
+            const data = await resp.json();
+            renderTable(data.data || []);
+            document.getElementById('result-count').textContent = `（共 ${data.count} 条）`;
+        }
+
+        function renderTable(results) {
+            const tbody = document.querySelector('#result-table tbody');
+            if (results.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">暂无数据</td></tr>';
+                return;
+            }
+            tbody.innerHTML = results.map(r => `
+                <tr class="${r.is_intent ? 'row-intent' : ''}">
+                    <td>${r.is_intent ? '🔥' : ''}</td>
+                    <td class="td-content">${escHtml(r.content)}</td>
+                    <td>${escHtml(r.user_name)}<br><small>${escHtml(r.user_id)}</small></td>
+                    <td>${escHtml(r.created_at || '')}</td>
+                    <td class="td-title">${escHtml(r.note_title)}</td>
+                    <td><a href="${escHtml(r.note_url)}" target="_blank" class="link">查看笔记 ↗</a></td>
+                    <td><span class="keyword-badge">${escHtml(r.keyword)}</span></td>
+                </tr>
+            `).join('');
+        }
+
+        function escHtml(s) {
+            if (!s) return '';
+            const div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        // ============ 导出 ============
+        async function exportExcel() {
+            const kw = document.getElementById('filter-keyword').value;
+            const sd = document.getElementById('filter-start-date').value;
+            const ed = document.getElementById('filter-end-date').value;
+            const intentOnly = document.getElementById('filter-intent-only').checked;
+
+            try {
+                const resp = await fetch('/api/export', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        keyword: kw || null,
+                        start_date: sd || null,
+                        end_date: ed || null,
+                        intent_only: intentOnly,
+                    }),
+                });
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `团建线索_${new Date().toISOString().slice(0,10)}.xlsx`;
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                } else {
+                    const data = await resp.json();
+                    alert(data.message || '导出失败');
+                }
+            } catch (e) { alert('导出失败'); }
+        }
+
+        async function clearData() {
+            if (!confirm('确定清空所有采集数据？此操作不可恢复！')) return;
+            await fetch('/api/results/clear', { method: 'POST' });
+            await loadResults();
+            await loadStats();
+        }
+
+        // ============ 统计 ============
+        async function loadStats() {
+            try {
+                const resp = await fetch('/api/stats');
+                const data = await resp.json();
+                if (data.success) {
+                    document.getElementById('stat-notes').textContent = data.stats.total_notes;
+                    document.getElementById('stat-comments').textContent = data.stats.total_comments;
+                    document.getElementById('stat-intent').textContent = data.stats.intent_comments;
+                }
+            } catch (e) { /* ignore */ }
+        }
+
+        // ============ 退出 ============
+        async function logout() {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            location.href = '/';
+        }
+
+        // 启动
+        init();
+    </script>
+</body>
+</html>
