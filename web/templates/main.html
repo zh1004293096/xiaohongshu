@@ -295,6 +295,12 @@
                     document.getElementById('progress-bar').style.width = pct + '%';
                     document.getElementById('progress-text').textContent =
                         `阶段: ${data.phase} | 关键词: ${data.keyword} | 笔记: ${data.notes_found} | 评论: ${data.comments_found}`;
+
+                    // 实时刷新数据表格（只要在采集就每轮刷新）
+                    if (data.notes_found > 0 || data.comments_found > 0) {
+                        await loadResults();
+                        await loadStats();
+                    }
                 } else {
                     btnStart.style.display = 'block';
                     btnStop.style.display = 'none';
