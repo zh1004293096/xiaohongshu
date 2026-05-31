@@ -68,16 +68,15 @@ class AuthManager:
     # -------- 浏览器生命周期 --------
 
     def init_browser(self):
-        """启动 Playwright 浏览器（使用 launch() 避免 persistent_context 兼容性问题）
+        """启动 Playwright 浏览器（不导航，仅创建浏览器窗口）
 
-        在 Flask 启动时预调用，避免首次登录时等待过长。
+        在用户点击「打开登录页」时按需调用。
         """
         if self._playwright is not None:
             return
 
-        print('  [auth] 启动 Playwright...')
+        print('  [auth] 启动浏览器...')
         self._playwright = sync_playwright().start()
-        print('  [auth] 启动 Chromium 浏览器...')
         self._browser = self._playwright.chromium.launch(
             headless=False,
             args=[
@@ -102,9 +101,8 @@ class AuthManager:
             window.chrome = { runtime: {} };
         """)
 
-        # 尝试恢复 Cookie
+        # 尝试恢复 Cookie（如有）
         self._load_cookies()
-        self._check_existing_login()
 
     def _check_existing_login(self):
         """检查是否已有登录态（通过 Cookie 恢复后验证）"""
@@ -182,26 +180,30 @@ class AuthManager:
     # -------- 扫码登录（浏览器窗口直接显示） --------
 
     def open_login_page(self) -> dict:
-        """打开小红书登录页（在可见浏览器窗口中），立即返回。
+        """打开小红书登录页（按需弹出浏览器窗口），立即返回。
 
-        不等页面加载完成——调用方通过轮询 check_login_status() 判断登录结果。
+        首次调用时启动 Chromium 浏览器，后续调用复用。
+        前端通过轮询 check_login_status() 判断登录结果。
         """
         if not self._page:
             try:
                 self.init_browser()
+                # 如果有 Cookie，快速验证是否仍有效
+                if os.path.exists(COOKIE_FILE):
+                    self._check_existing_login()
             except Exception as e:
                 return {'success': False, 'message': f'浏览器启动失败: {e}'}
 
-        # 如果已经登录，直接返回
+        # 如果 Cookie 恢复了登录态，直接返回
         if self._logged_in:
             return {'success': True, 'message': '已登录', 'already_logged_in': True}
 
         try:
-            # 快速导航（短超时，不计成败）
+            # 快速导航到小红书首页（短超时，不计成败——页面会在浏览器中继续加载）
             try:
                 self._page.goto(config.XHS_BASE, wait_until='domcontentloaded', timeout=8000)
             except Exception:
-                pass  # 超时也不影响，页面会在浏览器中继续加载
+                pass
 
             # 检查风控
             if '/website-login/error' in self._page.url:

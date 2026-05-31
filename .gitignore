@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 运行时数据（每次运行生成，不提交）
+data/leads.db
+data/cookies.json
+data/exports/
+data/browser_profile/
+data/*.png
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

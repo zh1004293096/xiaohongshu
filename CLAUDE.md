@@ -126,7 +126,7 @@ d:\Project\xiaohongshu\
 6. **浏览器启动从 `launch_persistent_context` 改为 `launch()`** — 持久化 context 在 Windows 上崩溃，改用 `launch()` + Cookie JSON 文件持久化登录态
 7. **爬虫独立创建 Playwright 实例** — 避免跨线程 greenlet 冲突，爬虫在后台线程中新建浏览器并从 Cookie 文件恢复登录态
 8. **Flask 改为单线程模式** — 确保所有 Playwright 操作在同一 greenlet 线程
-9. **浏览器预初始化** — Flask 启动时预启动 Chromium，避免首次登录等待过长
+9. **浏览器按需弹出** — Flask 启动时不弹 Playwright 浏览器，用户点击「打开登录页」按钮时才弹出
 10. **登录流程改为 fire-and-forget + 轮询** — 前端不等待 HTTP 响应，立即开始轮询登录状态
 
 ### ✅ 本轮自测通过

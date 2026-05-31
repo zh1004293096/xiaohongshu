@@ -262,15 +262,7 @@ def main():
     print(f'  地址: http://{config.FLASK_HOST}:{config.FLASK_PORT}')
     print(f' ========================================')
 
-    # 预启动 Playwright 浏览器（避免首次登录时等待过长）
-    print('  正在初始化浏览器...')
-    try:
-        auth.init_browser()
-        print('  浏览器就绪')
-    except Exception as e:
-        print(f'  浏览器初始化失败: {e}')
-
-    # 自动打开系统浏览器访问 Web 界面
+    # 自动打开系统浏览器访问 Web 界面（不弹 Playwright，用户点按钮时才弹）
     threading.Thread(
         target=lambda: (__import__('time').sleep(1.5),
                         webbrowser.open(f'http://{config.FLASK_HOST}:{config.FLASK_PORT}')),
