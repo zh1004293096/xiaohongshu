@@ -317,6 +317,9 @@ class AuthManager:
         # 如果浏览器是新开的，先打开登录页
         if not self._login_page_opened:
             result = self.open_login_page()
+            # 如果已登录，直接返回已登录状态
+            if result.get('already_logged_in'):
+                return {'success': True, 'already_logged_in': True, 'message': '已有登录态'}
             if not result['success']:
                 return result
 
@@ -385,7 +388,21 @@ class AuthManager:
         if not self._page:
             return {'success': False, 'message': '浏览器未启动'}
 
+        # 如果已经是登录状态，直接返回成功
+        if self._logged_in:
+            return {'success': True, 'message': '登录成功'}
+
         try:
+            # 先检查当前页面是否已经是登录后的页面（Cookie 恢复等场景）
+            url = self._page.url
+            if '/explore' in url or '/recommend' in url:
+                page_text = self._page.inner_text('body')[:2000]
+                if '手机号登录' not in page_text:
+                    self._logged_in = True
+                    self._try_extract_user_info()
+                    self._save_cookies()
+                    return {'success': True, 'message': '已有登录态，无需重复登录'}
+
             code_input = self._page.query_selector(
                 'input[placeholder*="验证码"], input[maxlength="6"], input[type="number"]')
             if code_input:

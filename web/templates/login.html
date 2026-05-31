@@ -161,7 +161,14 @@
 
             // 先确保浏览器窗口已打开
             try {
-                await fetch('/api/auth/login-page/open', { method: 'POST' });
+                const resp = await fetch('/api/auth/login-page/open', { method: 'POST' });
+                const loginData = await resp.json();
+                // 如果已有登录态，直接跳转主页
+                if (loginData.already_logged_in) {
+                    showMsg('已有登录态，正在跳转...', 'success');
+                    setTimeout(() => location.href = '/main', 500);
+                    return;
+                }
             } catch (e) { /* continue */ }
 
             try {
@@ -171,6 +178,12 @@
                     body: JSON.stringify({ phone }),
                 });
                 const data = await resp.json();
+                // 如果返回了 already_logged_in，直接跳转
+                if (data.already_logged_in) {
+                    showMsg('已有登录态，正在跳转...', 'success');
+                    setTimeout(() => location.href = '/main', 500);
+                    return;
+                }
                 showMsg(data.message, data.success ? 'success' : 'error');
                 if (data.success) {
                     codeCountdown = 60;
