@@ -182,29 +182,26 @@ class Crawler:
     def _search_via_api(self, page, keyword: str) -> List[Note]:
         """通过拦截 XHS 搜索 API 获取笔记"""
         notes = []
-        captured_data = []
+        raw_items = []  # 保存原始 item 用于日志
         api_urls_seen = set()
-        is_first_search = (self._status['notes_found'] == 0)
+        is_first = not hasattr(self, '_debug_dumped')
 
         def on_response(response):
-            """拦截搜索 API 响应"""
+            nonlocal raw_items
             try:
                 url = response.url
-                # 记录所有 API 请求的 URL（调试用）
-                if is_first_search and '/api/' in url and url not in api_urls_seen:
+                if is_first and '/api/' in url and url not in api_urls_seen:
                     api_urls_seen.add(url)
-                    # 筛选有意义的 API（非静态资源）
-                    if any(k in url for k in ['search', 'note', 'feed', 'recommend', 'homefeed']):
-                        self._log(f'  API 请求: ...{url[-80:]}')
+                    if any(k in url for k in ['search', 'note', 'feed']):
+                        self._log(f'  API: ...{url[-80:]}')
 
                 if response.status != 200:
                     return
 
-                # 搜索 API 可能有多种路径格式
                 is_search_api = (
                     '/api/sns/web/v1/search' in url or
                     '/api/sns/web/v2/search' in url or
-                    ('/api/' in url and 'search' in url and 'note' in url)
+                    ('/api/' in url and 'search' in url and 'notes' in url)
                 )
                 if not is_search_api:
                     return
@@ -213,7 +210,6 @@ class Crawler:
                 if not body:
                     return
 
-                # 兼容不同响应格式：success/code + data
                 ok = body.get('success') or body.get('code') == 0
                 data = body.get('data') or {}
                 if not ok or not data:
@@ -222,79 +218,132 @@ class Crawler:
                 items = data.get('items') or data.get('notes') or []
                 if not items and isinstance(data, list):
                     items = data
-                captured_data.extend(items)
-                self._log(f'    API 拦截: {len(items)} 条笔记')
+
+                if is_first and items:
+                    # 保存第一个 API 响应用于调试
+                    try:
+                        dump_path = _os.path.join(config.DATA_DIR, 'debug_api_response.json')
+                        with open(dump_path, 'w', encoding='utf-8') as f:
+                            json.dump(items[:2], f, ensure_ascii=False, indent=2)
+                        self._log(f'  原始数据已保存: {dump_path}')
+                        self._debug_dumped = True
+                    except Exception:
+                        pass
+
+                raw_items.extend(items)
+                self._log(f'    API 返回: {len(items)} 条')
             except Exception:
                 pass
 
         try:
-            # 注册拦截
             page.on('response', on_response)
-
-            # 打开搜索页
-            search_url = config.XHS_SEARCH.format(keyword)
-            # 同时尝试 type=1（笔记类型）
             alt_url = f'{config.XHS_SEARCH.format(keyword)}&type=1'
             page.goto(alt_url, wait_until='domcontentloaded', timeout=config.REQUEST_TIMEOUT)
-
-            # 等待 API 返回
             page.wait_for_timeout(3000)
-            # 滚动触发更多加载
+
             for _ in range(6):
                 page.evaluate('window.scrollBy(0, window.innerHeight * 0.6)')
                 page.wait_for_timeout(1500)
 
-            # 移除拦截器
             page.remove_listener('response', on_response)
 
-            # 解析捕获的数据
+            # --- 解析笔记（更健壮的数据路径匹配）---
             seen_ids = set()
-            for item in captured_data:
+            for item in raw_items:
                 try:
-                    # 数据结构适应不同的 API 格式
-                    note_id = ''
-                    title = ''
+                    # XHS API 可能有多种嵌套方式
+                    # 尝试所有可能的 note 数据容器
+                    candidates = [
+                        item,
+                        item.get('note_card'),
+                        item.get('note'),
+                        item.get('noteCard'),
+                        item.get('post'),
+                    ]
 
-                    # 格式1: item.note_card / item.display_title
-                    nc = item.get('note_card') or item
-                    note_id = nc.get('note_id') or nc.get('id') or ''
-                    title = (nc.get('display_title') or nc.get('title') or
-                             nc.get('desc', '') or '').strip()
+                    for nc in candidates:
+                        if not isinstance(nc, dict):
+                            continue
 
-                    if not note_id:
-                        continue
+                        # 尝试所有可能的 ID 字段
+                        note_id = ''
+                        for id_field in ('note_id', 'id', 'nid', 'noteId',
+                                         'noteid', 'post_id'):
+                            vid = nc.get(id_field)
+                            if vid:
+                                note_id = str(vid)
+                                break
+                        if not note_id:
+                            continue
 
-                    # 构建完整 URL
-                    note_url = f'{config.XHS_BASE}/explore/{note_id}'
+                        # 尝试所有可能的标题字段
+                        title = ''
+                        for t_field in ('display_title', 'title', 'content', 'desc',
+                                        'description', 'summary', 'note_title', 'name'):
+                            vt = nc.get(t_field)
+                            if vt and isinstance(vt, str) and len(vt.strip()) >= 3:
+                                title = vt.strip()
+                                break
+                        if not title:
+                            # 可能标题在内层
+                            for sub in (nc.get('info'), nc.get('meta')):
+                                if isinstance(sub, dict):
+                                    for t_field in ('title', 'display_title'):
+                                        vt = sub.get(t_field)
+                                        if vt and isinstance(vt, str) and len(vt.strip()) >= 3:
+                                            title = vt.strip()
+                                            break
+                                    if title:
+                                        break
 
-                    # 作者
-                    user_info = nc.get('user') or nc.get('author') or {}
-                    author_name = user_info.get('nickname') or user_info.get('nick_name') or ''
-                    author_id = user_info.get('user_id') or user_info.get('red_id') or ''
+                        note_url = f'{config.XHS_BASE}/explore/{note_id}'
 
-                    if note_id in seen_ids:
-                        continue
-                    seen_ids.add(note_id)
+                        # 作者
+                        user_info = {}
+                        for uf in ('user', 'author', 'user_info', 'owner', 'creator'):
+                            u = nc.get(uf)
+                            if isinstance(u, dict):
+                                user_info = u
+                                break
+                        author_name = (user_info.get('nickname') or
+                                       user_info.get('nick_name') or
+                                       user_info.get('name') or '')
+                        author_id = (user_info.get('user_id') or
+                                     user_info.get('red_id') or
+                                     user_info.get('id') or '')
 
-                    notes.append(Note(
-                        note_id=note_id,
-                        title=title[:100] or '无标题',
-                        author_id=str(author_id),
-                        author_name=author_name,
-                        url=note_url,
-                        keyword=keyword,
-                    ))
+                        if note_id in seen_ids:
+                            continue
+                        seen_ids.add(note_id)
+
+                        notes.append(Note(
+                            note_id=note_id,
+                            title=title[:100] or '无标题',
+                            author_id=str(author_id),
+                            author_name=author_name,
+                            url=note_url,
+                            keyword=keyword,
+                        ))
+                        break  # 找到有效数据，跳过其他 candidate
                 except Exception:
                     continue
 
-            self._log(f'  API 拦截共获 {len(notes)} 条有效笔记')
+            self._log(f'  解析出 {len(notes)} 条有效笔记')
+
+            if is_first and raw_items and not notes:
+                # 没解析出笔记，把完整原始数据 dump 出来
+                dump2 = _os.path.join(config.DATA_DIR, 'debug_api_full.json')
+                try:
+                    with open(dump2, 'w', encoding='utf-8') as f:
+                        json.dump(raw_items[:5], f, ensure_ascii=False, indent=2)
+                    self._log(f'  完整原始数据: {dump2}')
+                except Exception:
+                    pass
 
         except Exception as e:
             self._log(f'  API 拦截异常: {e}')
-            # 回退到 DOM 解析
             notes = self._search_fallback(page, keyword)
         finally:
-            # 确保移除
             try:
                 page.remove_listener('response', on_response)
             except Exception:
@@ -353,25 +402,66 @@ class Crawler:
     def _comments_via_api(self, page, note: Note) -> List[Comment]:
         """通过拦截 XHS 评论 API 获取评论"""
         captured_comments = []
+        raw_responses = []  # 保存原始响应用于调试
+        is_first_note = (self._status['comments_found'] == 0)
 
         def on_response(response):
+            nonlocal raw_responses
             try:
                 url = response.url
                 if response.status != 200:
                     return
-                # 评论 API 特征：/api/sns/web/ 路径中含 comment，排除子评论
-                if not ('/api/sns/web/' in url and 'comment' in url and 'sub_comment' not in url):
+
+                # 评论 API：放宽匹配条件
+                # XHS 笔记详情页的评论 API 路径可能有 /comment/page, /comment/list 等
+                is_comment_api = (
+                    ('/api/' in url and 'comment' in url.lower() and 'sub_comment' not in url) or
+                    # 也可能是 note detail API 直接带评论
+                    ('/api/' in url and 'note' in url and 'detail' in url)
+                )
+                if not is_comment_api:
                     return
+
                 body = response.json()
                 if not body:
                     return
+
                 ok = body.get('success') or body.get('code') == 0
-                data = body.get('data') or {}
-                if not ok or not data:
+                if not ok:
                     return
-                items = (data.get('comments') or data.get('items') or
-                         data.get('comment_list') or [])
-                captured_comments.extend(items)
+
+                data = body.get('data') or {}
+                if not data:
+                    return
+
+                # 多种可能的评论列表字段
+                com_list = (data.get('comments') or data.get('comment_list') or
+                            data.get('items') or data.get('list') or [])
+                if not com_list:
+                    # 也可能 data 本身是评论数组
+                    if isinstance(data, list):
+                        com_list = data
+                    else:
+                        # 更深: data.note.comments 等
+                        note_data = (data.get('note') or data.get('note_detail') or
+                                     data.get('item') or {})
+                        com_list = (note_data.get('comments') or
+                                    note_data.get('comment_list') or [])
+                if not com_list:
+                    return
+
+                if is_first_note and raw_responses == []:
+                    # 保存第一个评论 API 响应
+                    try:
+                        dump_path = _os.path.join(config.DATA_DIR, 'debug_comment_api.json')
+                        with open(dump_path, 'w', encoding='utf-8') as f:
+                            json.dump(com_list[:3], f, ensure_ascii=False, indent=2)
+                        self._log(f'    评论 API 数据: {dump_path}')
+                    except Exception:
+                        pass
+
+                raw_responses.append(len(com_list))
+                captured_comments.extend(com_list)
             except Exception:
                 pass
 
@@ -382,35 +472,55 @@ class Crawler:
             page.wait_for_timeout(3000)
 
             # 滚动触发评论加载
-            for _ in range(10):
+            for _ in range(12):
                 page.evaluate('window.scrollBy(0, window.innerHeight * 0.4)')
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(1000 + random.randint(0, 500))
 
             page.remove_listener('response', on_response)
+
+            if is_first_note and not captured_comments:
+                self._log(f'    未拦截到评论 API，API 请求数: {len(raw_responses)}')
 
             seen = set()
             for item in captured_comments:
                 try:
-                    # 格式可能是直接的评论对象
-                    content = (item.get('content') or item.get('comment') or
-                               item.get('text') or '').strip()
-                    if not content or len(content) < 2:
+                    # 尝试多种内容字段
+                    content = ''
+                    for cf in ('content', 'comment', 'text', 'body', 'desc', 'note'):
+                        v = item.get(cf)
+                        if v and isinstance(v, str) and len(v.strip()) >= 2:
+                            content = v.strip()
+                            break
+                    if not content:
                         continue
 
-                    user = item.get('user') or item.get('author') or item.get('user_info') or {}
+                    # 用户信息——可能在 user / author / user_info / 顶层字段
+                    user = {}
+                    for uf in ('user', 'author', 'user_info', 'creator', 'owner'):
+                        u = item.get(uf)
+                        if isinstance(u, dict):
+                            user = u
+                            break
                     user_name = (user.get('nickname') or user.get('nick_name') or
-                                 item.get('nickname') or '')
+                                 user.get('name') or item.get('nickname') or
+                                 item.get('user_name') or '用户')
                     user_id = (user.get('user_id') or user.get('red_id') or
-                               item.get('user_id') or '')
-                    created_at = (item.get('create_time') or item.get('time') or
-                                  item.get('created_at') or '')
+                               user.get('id') or item.get('user_id') or '')
 
-                    # 时间可能是时间戳
-                    if isinstance(created_at, (int, float)) and created_at > 1000000000:
-                        import datetime
-                        created_at = datetime.datetime.fromtimestamp(
-                            created_at / 1000 if created_at > 100000000000 else created_at
-                        ).strftime('%Y-%m-%d %H:%M')
+                    # 时间——可能是字符串或时间戳
+                    created_at = ''
+                    for tf in ('create_time', 'time', 'created_at', 'createTime',
+                               'createtime', 'create_timestamp'):
+                        vt = item.get(tf) or user.get(tf)
+                        if vt:
+                            if isinstance(vt, (int, float)) and vt > 1000000000:
+                                import datetime
+                                div = 1000 if vt > 100000000000 else 1
+                                created_at = datetime.datetime.fromtimestamp(
+                                    vt / div).strftime('%Y-%m-%d %H:%M')
+                            else:
+                                created_at = str(vt)[:30]
+                            break
 
                     cid = item.get('id') or str(abs(hash(
                         note.note_id + content + str(user_id))) % 10000000)
@@ -420,21 +530,17 @@ class Crawler:
                     seen.add(cid)
 
                     comments.append(Comment(
-                        comment_id=str(cid),
-                        note_id=note.note_id,
-                        content=content[:500],
-                        user_id=str(user_id),
-                        user_name=user_name or '用户',
-                        created_at=str(created_at) if created_at else '',
-                        note_title=note.title,
-                        note_url=note.url,
+                        comment_id=str(cid), note_id=note.note_id,
+                        content=content[:500], user_id=str(user_id),
+                        user_name=user_name, created_at=created_at,
+                        note_title=note.title, note_url=note.url,
                         keyword=note.keyword,
                     ))
                 except Exception:
                     continue
 
         except Exception as e:
-            self._log(f'  API 评论异常: {note.title[:20]} - {e}')
+            self._log(f'  评论异常: {note.title[:20]} - {e}')
         finally:
             try:
                 page.remove_listener('response', on_response)
