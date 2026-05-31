@@ -35,6 +35,7 @@ class Crawler:
             'current_note': '', 'error': None, 'needs_manual_action': False,
             'log': [],
         }
+        self._api_dumped = False  # 每次采集重置调试标记
 
     @property
     def status(self) -> dict:
@@ -184,7 +185,7 @@ class Crawler:
         notes = []
         raw_items = []  # 保存原始 item 用于日志
         api_urls_seen = set()
-        is_first = not hasattr(self, '_debug_dumped')
+        is_first = not getattr(self, '_api_dumped', False)
 
         def on_response(response):
             nonlocal raw_items
@@ -220,13 +221,13 @@ class Crawler:
                     items = data
 
                 if is_first and items:
-                    # 保存第一个 API 响应用于调试
                     try:
                         dump_path = _os.path.join(config.DATA_DIR, 'debug_api_response.json')
                         with open(dump_path, 'w', encoding='utf-8') as f:
                             json.dump(items[:2], f, ensure_ascii=False, indent=2)
+                        self._log(f'  原始每条记录的所有 key: {list(items[0].keys()) if items else []}')
                         self._log(f'  原始数据已保存: {dump_path}')
-                        self._debug_dumped = True
+                        self._api_dumped = True
                     except Exception:
                         pass
 
