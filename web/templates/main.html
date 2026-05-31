@@ -51,6 +51,11 @@
                     </div>
                     <p id="progress-text" class="progress-text"></p>
                 </div>
+                <!-- 验证码提醒 -->
+                <div id="captcha-alert" class="captcha-alert" style="display:none;">
+                    <p>⚠️ <strong>检测到验证码！</strong></p>
+                    <p>请在弹出的浏览器窗口中完成验证（拖动滑块等），完成后自动继续采集。</p>
+                </div>
             </section>
 
             <!-- 筛选 -->
@@ -269,15 +274,23 @@
                 const btnStart = document.getElementById('btn-start');
                 const btnStop = document.getElementById('btn-stop');
                 const progressArea = document.getElementById('progress-area');
+                const captchaAlert = document.getElementById('captcha-alert');
+
+                // 验证码提醒
+                if (data.needs_manual_action || data.phase === 'captcha') {
+                    captchaAlert.style.display = 'block';
+                } else {
+                    captchaAlert.style.display = 'none';
+                }
 
                 if (data.running) {
                     btnStart.style.display = 'none';
                     btnStop.style.display = 'block';
                     progressArea.style.display = 'block';
 
-                    const total = data.notes_total || 1;
-                    const done = data.notes_found || 0;
-                    const pct = Math.min(100, Math.round((done / Math.max(total, done + 1)) * 100));
+                    const total = Math.max(data.notes_total || 0, data.notes_found || 0, 1);
+                    const done = Math.max(data.notes_found || 0, data.comments_found || 0);
+                    const pct = Math.min(100, Math.round((done / Math.max(total, 1)) * 100));
 
                     document.getElementById('progress-bar').style.width = pct + '%';
                     document.getElementById('progress-text').textContent =
@@ -285,9 +298,14 @@
                 } else {
                     btnStart.style.display = 'block';
                     btnStop.style.display = 'none';
-                    if (data.phase === 'done' || data.phase === 'error') {
+                    if (data.phase === 'done') {
                         progressArea.style.display = 'none';
+                        captchaAlert.style.display = 'none';
                         await loadResults();
+                        await loadStats();
+                    } else if (data.phase === 'error') {
+                        progressArea.style.display = 'none';
+                        captchaAlert.style.display = 'none';
                     }
                     if (data.error) {
                         document.getElementById('progress-text').textContent = '出错: ' + data.error;

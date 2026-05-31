@@ -160,6 +160,13 @@ main { display: flex; height: calc(100vh - 56px); }
 }
 .progress-text { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 
+/* 验证码提醒 */
+.captcha-alert {
+    margin-top: 10px; padding: 12px; background: #FFF3CD; border: 1px solid #FFC107;
+    border-radius: 6px; font-size: 13px; line-height: 1.6;
+}
+.captcha-alert strong { color: #856404; }
+
 /* 表格 */
 .table-wrapper { overflow-x: auto; }
 #result-table { width: 100%; border-collapse: collapse; font-size: 13px; }
